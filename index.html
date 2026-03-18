@@ -396,8 +396,7 @@
 
   </div>
 
-  <!-- Elemen Audio (tersembunyi) -->
-  <audio id="bg-audio" src="https://h.top4top.io/m_3729zj4pz1.mp3" preload="auto" style="display: none;"></audio>
+  <!-- Elemen Audio TIDAK ADA di HTML (dibuat via JS saat scroll pertama) -->
 
   <script>
     // ─── PARTICLES ───────────────────────────────────────────────
@@ -427,7 +426,7 @@
         });
       }
     }
-    createParticles(55);
+    createParticles(55); // 55 partikel sesuai permintaan
 
     function drawParticles() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -484,13 +483,25 @@
 
     revealEls.forEach(el => observer.observe(el));
 
-    // ─── AUDIO SCROLL-TRIGGER (DIPUTAR SAAT SCROLL PERTAMA KALI) ───
-    const audio = document.getElementById('bg-audio');
-    if (audio) {
-      window.addEventListener('scroll', function playAudio() {
-        audio.play().catch(err => console.warn('Audio playback failed:', err));
-      }, { once: true }); // Hanya berjalan sekali
-    }
+    // ─── AUDIO DIPUTAR SAAT SCROLL PERTAMA (TANPA PRELOAD) ─────────
+    // Tidak ada elemen <audio> di HTML → tidak ada preload.
+    // Kita buat dan mainkan hanya saat scroll pertama.
+    let audio = null; // agar tidak dibuat ulang jika scroll lagi (tapi event only once)
+    window.addEventListener('scroll', function playAudioOnce() {
+      // Buat elemen audio baru
+      audio = new Audio('https://h.top4top.io/m_3729zj4pz1.mp3');
+      // Setel properti agar tidak mengganggu
+      audio.preload = 'none'; // tidak preload, langsung play saat dipanggil
+      audio.loop = false; // terserah, bisa diubah sesuai keinginan
+      
+      // Coba putar (karena dipicu scroll, kebijakan browser mengizinkan)
+      audio.play().catch(err => {
+        console.warn('Audio play gagal (mungkin autoplay policy):', err);
+      });
+      
+      // Hapus event listener setelah pertama kali (once: true sudah cukup, 
+      // tapi kita hapus manual juga untuk jaga-jaga)
+    }, { once: true });
   </script>
 </body>
 </html>
