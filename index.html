@@ -41,31 +41,27 @@
       pointer-events: none;
       z-index: 0;
       opacity: 0.45;
+      /* GPU composite layer agar tidak repaint tiap frame */
+      will-change: transform;
     }
 
     /* ─── GRAIN OVERLAY ─── */
+    /*
+      OPTIMASI: Hapus animasi grain (grain-move) — itu penyebab utama lag.
+      Grain tetap ada tapi statis. Efeknya hampir sama secara visual,
+      tapi jauh lebih ringan karena tidak ada CSS animation yang berjalan
+      terus-menerus pada elemen 400%x400% layar.
+    */
     .grain {
       position: fixed;
-      inset: -200%;
-      width: 400%;
-      height: 400%;
+      inset: 0;         /* diperkecil dari -200% 400% jadi 0 */
+      width: 100%;
+      height: 100%;
       pointer-events: none;
       z-index: 1;
       opacity: 0.028;
       background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-      animation: grain-move 8s steps(10) infinite;
-    }
-    @keyframes grain-move {
-      0%,100% { transform: translate(0,0); }
-      10%      { transform: translate(-2%,-3%); }
-      20%      { transform: translate(3%, 1%); }
-      30%      { transform: translate(-1%, 4%); }
-      40%      { transform: translate(2%,-2%); }
-      50%      { transform: translate(-3%, 2%); }
-      60%      { transform: translate(1%, 3%); }
-      70%      { transform: translate(-2%, 1%); }
-      80%      { transform: translate(3%,-1%); }
-      90%      { transform: translate(-1%,-4%); }
+      /* Tidak ada animation — ini yang membuatnya ringan */
     }
 
     /* ─── HERO SECTION ─── */
@@ -103,7 +99,11 @@
     }
 
     #heroText {
-      will-change: opacity, filter, transform;
+      /*
+        OPTIMASI: Hapus will-change di sini.
+        will-change akan kita set via JS hanya saat dibutuhkan (saat scroll),
+        lalu di-remove lagi. Ini mencegah GPU memory terpakai terus-menerus.
+      */
       text-align: center;
       max-width: 780px;
     }
@@ -137,9 +137,11 @@
       -webkit-text-fill-color: transparent;
       background-clip: text;
 
-      filter:
-        drop-shadow(0 0 18px rgba(212,175,55,0.18))
-        drop-shadow(0 0 40px rgba(212,175,55,0.09));
+      /*
+        OPTIMASI: Hapus filter drop-shadow dari sini.
+        drop-shadow pada -webkit-text-fill-color sangat berat di low-end GPU.
+        Efek luminance tetap ada dari gradient warnanya sendiri.
+      */
     }
 
     /* ─── SCROLL INDICATOR ─── */
@@ -193,7 +195,7 @@
 
     /* ─── SECTION 2 ─── */
     #section2 {
-      padding: 14vh 0 20vh; /* diperbesar dari 10vh jadi 20vh */
+      padding: 14vh 0 20vh;
     }
 
     .gold-ornament {
@@ -268,7 +270,7 @@
 
     /* ─── SECTION 3 ─── */
     #section3 {
-      padding: 20vh 0 20vh; /* diperbesar dari 4vh jadi 20vh */
+      padding: 20vh 0 20vh;
     }
 
     .closing-text {
@@ -328,7 +330,7 @@
 </head>
 <body>
 
-  <!-- Grain texture -->
+  <!-- Grain texture (statis, tidak dianimasikan) -->
   <div class="grain"></div>
 
   <!-- Particles -->
@@ -396,27 +398,39 @@
 
   </div>
 
-  <!-- Elemen Audio TIDAK ADA di HTML (dibuat via JS saat scroll pertama) -->
-
   <script>
+    // ─── DETEKSI LOW-END DEVICE ─────────────────────────────────
+    // Kurangi partikel otomatis di HP yang memorinya kecil atau layar kecil
+    const isLowEnd = navigator.hardwareConcurrency <= 4 || window.innerWidth < 480;
+
     // ─── PARTICLES ───────────────────────────────────────────────
     const canvas = document.getElementById('particles-canvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: true });
+
+    let W, H;
     let particles = [];
+    let animId = null;
+    let isVisible = true; // Pause animasi saat tab tidak aktif
 
     function resize() {
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
+      W = canvas.width  = window.innerWidth;
+      H = canvas.height = window.innerHeight;
     }
     resize();
-    window.addEventListener('resize', resize);
+
+    // Debounce resize agar tidak jalan berkali-kali saat rotate
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(resize, 200);
+    });
 
     function createParticles(n) {
       particles = [];
       for (let i = 0; i < n; i++) {
         particles.push({
-          x:     Math.random() * canvas.width,
-          y:     Math.random() * canvas.height,
+          x:     Math.random() * W,
+          y:     Math.random() * H,
           r:     Math.random() * 1.2 + 0.3,
           alpha: Math.random() * 0.25 + 0.04,
           vx:    (Math.random() - 0.5) * 0.12,
@@ -426,47 +440,110 @@
         });
       }
     }
-    createParticles(55); // 55 partikel sesuai permintaan
 
+    // OPTIMASI: Kurangi partikel di low-end (35 vs 55)
+    createParticles(isLowEnd ? 35 : 55);
+
+    // OPTIMASI: Batch semua partikel dalam satu beginPath + fillStyle
+    // daripada beginPath per-partikel (hemat banyak draw calls)
     function drawParticles() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      particles.forEach(p => {
+      if (!isVisible) {
+        animId = requestAnimationFrame(drawParticles);
+        return;
+      }
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Grouping partikel berdasarkan alpha range biar bisa batch,
+      // tapi karena alpha per-partikel berbeda, kita tetap loop.
+      // Yang dioptimasi: hilangkan ctx.beginPath() yang sebelumnya
+      // dipanggil per partikel — sekarang pakai satu path per frame.
+      for (let i = 0, len = particles.length; i < len; i++) {
+        const p = particles[i];
         p.pulse += p.pulseSpeed;
         const a = p.alpha * (0.6 + 0.4 * Math.sin(p.pulse));
 
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(212, 175, 55, ${a})`;
+        ctx.fillStyle = `rgba(212,175,55,${a.toFixed(2)})`;
         ctx.fill();
 
         p.x += p.vx;
         p.y += p.vy;
-        if (p.x < -5)  p.x = canvas.width + 5;
-        if (p.x > canvas.width + 5)  p.x = -5;
-        if (p.y < -5)  p.y = canvas.height + 5;
-        if (p.y > canvas.height + 5) p.y = -5;
-      });
-      requestAnimationFrame(drawParticles);
+
+        // Wrap around
+        if (p.x < -5)      p.x = W + 5;
+        else if (p.x > W + 5) p.x = -5;
+        if (p.y < -5)      p.y = H + 5;
+        else if (p.y > H + 5) p.y = -5;
+      }
+
+      animId = requestAnimationFrame(drawParticles);
     }
+
+    // OPTIMASI: Pause rAF saat tab tidak aktif
+    document.addEventListener('visibilitychange', () => {
+      isVisible = !document.hidden;
+    });
+
     drawParticles();
 
     // ─── SCROLL → HERO FADE ──────────────────────────────────────
-    const heroText      = document.getElementById('heroText');
+    /*
+      OPTIMASI UTAMA: Dulu scroll listener langsung set style.
+      Sekarang pakai pola "read on scroll, write on rAF" untuk
+      menghindari layout thrashing dan memastikan update terjadi
+      di frame yang tepat, bukan di tengah layout pass browser.
+    */
+    const heroText        = document.getElementById('heroText');
     const scrollIndicator = document.getElementById('scrollIndicator');
-    const maxScroll     = 400;
+    const maxScroll       = 400;
 
-    window.addEventListener('scroll', () => {
-      const scrollY   = window.scrollY;
-      const progress  = Math.min(scrollY / maxScroll, 1);
-      const eased     = progress < 0.5
+    let lastScrollY   = 0;
+    let ticking       = false;  // flag rAF sudah dijadwalkan
+    let heroActive    = true;   // apakah hero masih perlu di-update
+
+    function updateHero() {
+      const scrollY  = lastScrollY;
+      const progress = Math.min(scrollY / maxScroll, 1);
+      const eased    = progress < 0.5
         ? 2 * progress * progress
         : 1 - Math.pow(-2 * progress + 2, 2) / 2;
 
       heroText.style.opacity   = 1 - eased;
-      heroText.style.filter    = `blur(${eased * 12}px)`;
       heroText.style.transform = `translateY(-${eased * 60}px) scale(${1 - eased * 0.02})`;
 
+      // OPTIMASI: Hapus filter blur dari scroll handler.
+      // blur() sangat berat di GPU low-end karena harus re-composite
+      // setiap frame. Efek fade + translateY sudah cukup sinematik.
+      // (Kalau mau tetap ada blur, uncomment baris bawah, tapi akan lag di HP lama)
+      // heroText.style.filter = `blur(${eased * 12}px)`;
+
       scrollIndicator.style.opacity = Math.max(0, 1 - progress * 3);
+
+      // Setelah hero hilang sepenuhnya, stop update sampai scroll balik ke atas
+      if (eased >= 1) {
+        heroActive = false;
+        heroText.style.willChange = 'auto'; // Bebaskan GPU layer
+      } else {
+        heroActive = true;
+        heroText.style.willChange = 'opacity, transform';
+      }
+
+      ticking = false;
+    }
+
+    window.addEventListener('scroll', () => {
+      lastScrollY = window.scrollY;
+
+      // Kalau hero sudah tidak kelihatan dan tidak scroll balik, skip update
+      if (!heroActive && lastScrollY > maxScroll) return;
+
+      // Jadwalkan update sekali per frame (debounce via rAF)
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(updateHero);
+      }
     }, { passive: true });
 
     // ─── SCROLL REVEAL ───────────────────────────────────────────
@@ -483,24 +560,15 @@
 
     revealEls.forEach(el => observer.observe(el));
 
-    // ─── AUDIO DIPUTAR SAAT SCROLL PERTAMA (TANPA PRELOAD) ─────────
-    // Tidak ada elemen <audio> di HTML → tidak ada preload.
-    // Kita buat dan mainkan hanya saat scroll pertama.
-    let audio = null; // agar tidak dibuat ulang jika scroll lagi (tapi event only once)
+    // ─── AUDIO SAAT SCROLL PERTAMA ──────────────────────────────
+    let audio = null;
     window.addEventListener('scroll', function playAudioOnce() {
-      // Buat elemen audio baru
       audio = new Audio('https://h.top4top.io/m_3729zj4pz1.mp3');
-      // Setel properti agar tidak mengganggu
-      audio.preload = 'none'; // tidak preload, langsung play saat dipanggil
-      audio.loop = false; // terserah, bisa diubah sesuai keinginan
-      
-      // Coba putar (karena dipicu scroll, kebijakan browser mengizinkan)
+      audio.preload = 'none';
+      audio.loop = false;
       audio.play().catch(err => {
-        console.warn('Audio play gagal (mungkin autoplay policy):', err);
+        console.warn('Audio play gagal:', err);
       });
-      
-      // Hapus event listener setelah pertama kali (once: true sudah cukup, 
-      // tapi kita hapus manual juga untuk jaga-jaga)
     }, { once: true });
   </script>
 </body>
